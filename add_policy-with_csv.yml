@@ -1,0 +1,95 @@
+---
+- name: Verify Object
+  hosts: fortimanager
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: import csv
+      csv_to_facts:
+        src: "{{ playbook_dir }}/subnets.csv" 
+
+    - name:  CREATE PROVIDER
+      set_fact:
+        fortimanager_provider:
+          host: "{{ ansible_host }}"
+          username: "{{ ansible_user }}"
+          password: "{{ ansible_password }}"
+          adom: "EMEA-ZTEST"
+
+    - name: ENSURE Source ADDRESSES ARE ABSENT USING POLICY ID
+      fortimgr_address:
+        provider: "{{ fortimanager_provider }}"
+        adom: "EMEA-ZTEST"
+        address_name: "{{ item.source_name }}"
+        address_type: "ipmask"
+        subnet: "{{ item.source_ip }}"
+        associated_intfc: "any"
+        comment: "splunk Server"
+        lock: false
+      loop: '{{ spreadsheet }}'
+      tags: subnet
+
+    - name: ENSURE DESTINATION ADDRESSES ARE ABSENT USING POLICY ID
+      fortimgr_address:
+        provider: "{{ fortimanager_provider }}"
+        adom: "EMEA-ZTEST"
+        address_name: "{{ item.dest_name }}"
+        address_type: "ipmask"
+        subnet: "{{ item.dest_ip }}"
+        associated_intfc: "any"
+        comment: "splunk Server"
+        lock: false
+      loop: '{{ spreadsheet }}'
+      tags: subnet
+
+    - name: ENSURE SERVICE OBJECT EXISTS
+      fortimgr_service:
+        provider: "{{ fortimanager_provider }}"
+        adom: "EMEA-ZTEST"
+        service_name: "{{ item.service_name }}"
+        protocol: "{{ item.protocol }}"
+        port_range: "{{ item.port }}"
+        lock: false
+      loop: '{{ spreadsheet }}'     
+      tags: services
+      ignore_errors: yes
+
+    - name: Add Policy
+      fortimgr_policy:
+        provider: "{{ fortimanager_provider }}"
+        adom: "EMEA-ZTEST"
+        package: "{{ item.firewall }}"
+        action: "accept"
+        destination_address: "{{ item.source_name }}"
+        destination_intfc: "any"
+        schedule: "always"
+        service: "{{ item.service_name }}"
+        source_address: "{{ item.dest_name }}"
+        source_intfc: "any"
+        match_filter: true
+        match_filters: "all"
+        nat: "disable"
+        ip_pool: "disable"
+        lock: false
+      loop: '{{ spreadsheet }}' 
+      tags: policies          
+      register: policy_status
+      ignore_errors: yes
+    - debug:
+        var: policy_status.changed
+
+    - name: INSTALL AND GENERATE REVISION
+      fortimgr_install:
+        provider: "{{ fortimanager_provider }}"
+        state: "present"
+        adom: "EMEA-ZTEST"
+        adom_revision_comments: "Update Policy from ansible"
+        adom_revision_name: "Ansible_update"
+        check_install: True
+        fortigate_name: "F3240C-BCN1-01S-SPARE-U1"
+        fortigate_revision_comments: "Update Lab Policy"
+        install_flags: "generate_rev"
+        package: "F3240C-BCN1-01S-SPARE-U1"
+        lock: false
+      when: policy_status.changed == true
+      ignore_errors: yes
